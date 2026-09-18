@@ -1,4 +1,4 @@
-"""GUI界面 - PySimpleGUI界面"""
+"""GUI界面 - PySimpleGUI界面（自适应布局）"""
 
 import json
 import time
@@ -49,7 +49,7 @@ class MainWindow:
         print("[GUI] 初始化完成")
     
     def create_layout(self) -> list:
-        """创建界面布局"""
+        """创建界面布局（自适应）"""
         # 坐标配置区域
         coord_frame = sg.Frame('坐标配置', [
             [sg.Text('通货位置:', size=(10, 1)),
@@ -57,16 +57,19 @@ class MainWindow:
              sg.Text('X'),
              sg.Input(key='-CURRENCY_Y-', size=(8, 1)),
              sg.Text('Y'),
-             sg.Button('获取鼠标位置', key='-GET_CURRENCY-', size=(12, 1))],
+             sg.Push(),
+             sg.Button('获取鼠标位置', key='-GET_CURRENCY-')],
             [sg.Text('物品位置:', size=(10, 1)),
              sg.Input(key='-ITEM_X-', size=(8, 1)),
              sg.Text('X'),
              sg.Input(key='-ITEM_Y-', size=(8, 1)),
              sg.Text('Y'),
-             sg.Button('获取鼠标位置', key='-GET_ITEM-', size=(12, 1))],
-            [sg.Button('保存坐标', key='-SAVE_COORD-', size=(10, 1)),
-             sg.Button('加载坐标', key='-LOAD_COORD-', size=(10, 1))]
-        ], size=(600, 120))
+             sg.Push(),
+             sg.Button('获取鼠标位置', key='-GET_ITEM-')],
+            [sg.Button('保存坐标', key='-SAVE_COORD-'),
+             sg.Button('加载坐标', key='-LOAD_COORD-'),
+             sg.Push()]
+        ], expand_x=True)
         
         # 词缀条件区域
         affix_frame = sg.Frame('词缀条件', [
@@ -78,12 +81,14 @@ class MainWindow:
              sg.Combo(['>=', '>', '<=', '<', '==', '!='], default_value='>=', 
                      key='-OPERATOR-', size=(4, 1)),
              sg.Input(key='-VALUE-', size=(8, 1)),
-             sg.Button('添加', key='-ADD_REQ-', size=(6, 1))],
-            [sg.Listbox(values=[], size=(70, 5), key='-REQ_LIST-',
-                       select_mode=sg.LISTBOX_SELECT_MODE_SINGLE)],
-            [sg.Button('删除选中', key='-DEL_REQ-', size=(10, 1)),
-             sg.Button('清空全部', key='-CLEAR_REQ-', size=(10, 1))]
-        ], size=(600, 180))
+             sg.Button('添加', key='-ADD_REQ-')],
+            [sg.Listbox(values=[], size=(60, 5), key='-REQ_LIST-',
+                       select_mode=sg.LISTBOX_SELECT_MODE_SINGLE,
+                       expand_x=True, expand_y=True)],
+            [sg.Button('删除选中', key='-DEL_REQ-'),
+             sg.Button('清空全部', key='-CLEAR_REQ-'),
+             sg.Push()]
+        ], expand_x=True)
         
         # 设置区域
         settings_frame = sg.Frame('设置', [
@@ -93,28 +98,30 @@ class MainWindow:
              sg.Input(key='-DELAY_MIN-', size=(5, 1), default_text='0.15'),
              sg.Text('~'),
              sg.Input(key='-DELAY_MAX-', size=(5, 1), default_text='0.35'),
-             sg.Text('秒')]
-        ], size=(600, 60))
+             sg.Text('秒'),
+             sg.Push()]
+        ], expand_x=True)
         
         # 控制按钮区域
         button_frame = sg.Frame('控制', [
-            [sg.Button('保存配置', key='-SAVE_CONFIG-', size=(10, 1)),
-             sg.Button('加载配置', key='-LOAD_CONFIG-', size=(10, 1)),
-             sg.Button('测试剪贴板', key='-TEST_CLIP-', size=(10, 1)),
-             sg.Button('测试解析', key='-TEST_PARSE-', size=(10, 1))],
-            [sg.Button('▶ 开始 (F9)', key='-START-', size=(14, 1), button_color=('white', 'green')),
-             sg.Button('⏸ 暂停 (F10)', key='-PAUSE-', size=(14, 1), button_color=('white', 'orange')),
-             sg.Button('⏹ 停止 (F11)', key='-STOP-', size=(14, 1), button_color=('white', 'red')),
-             sg.Button('🚨 紧急停止 (F12)', key='-EMERGENCY-', size=(16, 1), button_color=('white', 'darkred'))]
-        ], size=(600, 100))
+            [sg.Button('保存配置', key='-SAVE_CONFIG-'),
+             sg.Button('加载配置', key='-LOAD_CONFIG-'),
+             sg.Button('测试剪贴板', key='-TEST_CLIP-'),
+             sg.Button('测试解析', key='-TEST_PARSE-')],
+            [sg.Button('▶ 开始 (F9)', key='-START-', button_color=('white', 'green')),
+             sg.Button('⏸ 暂停 (F10)', key='-PAUSE-', button_color=('white', 'orange')),
+             sg.Button('⏹ 停止 (F11)', key='-STOP-', button_color=('white', 'red')),
+             sg.Button('🚨 紧急停止 (F12)', key='-EMERGENCY-', button_color=('white', 'darkred'))]
+        ], expand_x=True)
         
         # 状态区域
         status_frame = sg.Frame('状态', [
-            [sg.Text('状态: 空闲', key='-STATUS-', size=(30, 1)),
+            [sg.Text('状态: 空闲', key='-STATUS-', size=(20, 1)),
              sg.Text('次数: 0/100', key='-ATTEMPTS-', size=(15, 1)),
              sg.Text('用时: 00:00:00', key='-ELAPSED-', size=(15, 1))],
-            [sg.Multiline(size=(80, 10), key='-LOG-', disabled=True, autoscroll=True)]
-        ], size=(600, 200))
+            [sg.Multiline(size=(70, 10), key='-LOG-', disabled=True, autoscroll=True,
+                         expand_x=True, expand_y=True)]
+        ], expand_x=True, expand_y=True)
         
         # 完整布局
         layout = [
@@ -138,6 +145,9 @@ class MainWindow:
             resizable=True,
             font=('Microsoft YaHei', 10)
         )
+        
+        # 设置最小窗口大小
+        window.set_min_size((600, 700))
         
         return window
     
@@ -353,7 +363,6 @@ class MainWindow:
             elif event == '-DEL_REQ-':
                 selected = values['-REQ_LIST-']
                 if selected:
-                    # 简化处理：清空并重新添加
                     self._log("请使用清空全部功能")
             
             elif event == '-CLEAR_REQ-':
@@ -388,7 +397,6 @@ class MainWindow:
             
             # 控制
             elif event == '-START-':
-                # 更新设置
                 try:
                     self.crafter.max_attempts = int(values['-MAX_ATTEMPTS-'])
                     self.crafter.delay_min = float(values['-DELAY_MIN-'])
