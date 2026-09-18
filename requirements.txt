@@ -1,0 +1,10 @@
+# 核心依赖
+pyperclip>=1.8.0
+pyautogui>=0.9.54
+
+# GUI依赖
+PySimpleGUI>=5.0.0
+
+# Windows专用（可选）
+# pydirectinput>=1.0.4
+# pywin32>=305
