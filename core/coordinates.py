@@ -15,7 +15,8 @@ class CoordinateManager:
             config_path: 配置文件路径
         """
         if config_path is None:
-            config_path = str(Path(__file__).parent.parent / "config" / "coordinates.json")
+            from core.paths import config_dir
+            config_path = str(config_dir() / "coordinates.json")
         
         self.config_path = config_path
         self.coordinates = {

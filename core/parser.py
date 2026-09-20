@@ -42,7 +42,54 @@ class AffixRequirement:
     value: Optional[int] = None      # 目标值
     match_mode: MatchMode = MatchMode.CONTAINS  # 匹配模式
     is_include: bool = True          # 是否包含（True=Included, False=Excluded）
-    
+    # T阶需求（仅该阶）：effect为中文效果名，tier_lo/tier_hi为该阶数值区间
+    effect: Optional[str] = None
+    tier: Optional[int] = None
+    tier_lo: Optional[float] = None
+    tier_hi: Optional[float] = None
+
+    def display(self) -> str:
+        """显示文本"""
+        prefix = "包含" if self.is_include else "排除"
+        if self.tier is not None:
+            lo = int(self.tier_lo) if self.tier_lo is not None else ''
+            hi = int(self.tier_hi) if self.tier_hi is not None else ''
+            return f"[{prefix}] {self.effect} T{self.tier}({lo}~{hi})"
+        value_str = f" {self.operator} {self.value}" if self.value is not None else ""
+        return f"[{prefix}] {self.keyword}{value_str}"
+
+    def to_dict(self) -> Dict:
+        """序列化为字典"""
+        return {
+            'keyword': self.keyword,
+            'operator': self.operator,
+            'value': self.value,
+            'is_include': self.is_include,
+            'effect': self.effect,
+            'tier': self.tier,
+            'tier_lo': self.tier_lo,
+            'tier_hi': self.tier_hi,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> 'AffixRequirement':
+        """从字典反序列化"""
+        return cls(
+            keyword=d.get('keyword', ''),
+            operator=d.get('operator', '>='),
+            value=d.get('value'),
+            is_include=d.get('is_include', True),
+            effect=d.get('effect'),
+            tier=d.get('tier'),
+            tier_lo=d.get('tier_lo'),
+            tier_hi=d.get('tier_hi'),
+        )
+
+    @staticmethod
+    def _cn_only(text: str) -> str:
+        """提取文本中的中文与字母部分（去数字和符号）"""
+        return re.sub(r'[^\u4e00-\u9fffA-Za-z]', '', text)
+
     def matches(self, affix: Affix) -> bool:
         """检查词缀是否匹配需求
         
@@ -52,7 +99,18 @@ class AffixRequirement:
         Returns:
             是否匹配
         """
-        # 检查关键词
+        # T阶模式：按效果名匹配 + 数值必须落在该阶区间内（仅该阶）
+        if self.effect:
+            affix_cn = self._cn_only(affix.raw_text) + self._cn_only(affix.name)
+            if self.effect not in affix_cn:
+                return False
+            if self.tier_lo is not None and self.tier_hi is not None:
+                if affix.value is None:
+                    return False
+                return self.tier_lo - 0.01 <= affix.value <= self.tier_hi + 0.01
+            return True
+
+        # 关键词模式
         if self.match_mode == MatchMode.CONTAINS:
             if self.keyword not in affix.name and self.keyword not in affix.raw_text:
                 return False
@@ -62,12 +120,12 @@ class AffixRequirement:
         elif self.match_mode == MatchMode.REGEX:
             if not re.search(self.keyword, affix.raw_text):
                 return False
-        
+
         # 检查数值
         if self.value is not None and affix.value is not None:
             if not self._check_value(affix.value):
                 return False
-        
+
         return True
     
     def _check_value(self, actual_value: int) -> bool:
@@ -273,6 +331,30 @@ class AffixChecker:
             self.included_requirements.append(req)
         else:
             self.excluded_requirements.append(req)
+
+    def add_tier_requirement(self, effect: str, tier: int, tier_lo: float,
+                             tier_hi: float, is_include: bool = True):
+        """添加T阶词缀需求（仅该阶）
+
+        Args:
+            effect: 效果名（中文，如"冰冷抗性"）
+            tier: T阶编号
+            tier_lo: 该阶数值下限
+            tier_hi: 该阶数值上限
+            is_include: 是否包含
+        """
+        req = AffixRequirement(
+            keyword=effect,
+            effect=effect,
+            tier=tier,
+            tier_lo=tier_lo,
+            tier_hi=tier_hi,
+            is_include=is_include,
+        )
+        if is_include:
+            self.included_requirements.append(req)
+        else:
+            self.excluded_requirements.append(req)
     
     def remove_requirement(self, index: int, is_include: bool = True):
         """删除词缀需求
@@ -324,7 +406,7 @@ class AffixChecker:
             
             if not matched:
                 result['satisfied'] = False
-                result['details'].append(f"未找到包含的词缀: {req.keyword}")
+                result["details"].append(f"未满足: {req.display()}")
         
         # 检查 Excluded 词缀
         for req in self.excluded_requirements:
@@ -336,7 +418,7 @@ class AffixChecker:
                         'affix': affix.raw_text,
                         'value': affix.value
                     })
-                    result['details'].append(f"找到排除的词缀: {req.keyword}")
+                    result["details"].append(f"出现排除: {req.display()}")
                     break
         
         return result
@@ -348,22 +430,8 @@ class AffixChecker:
             需求摘要
         """
         return {
-            'included': [
-                {
-                    'keyword': req.keyword,
-                    'operator': req.operator,
-                    'value': req.value
-                }
-                for req in self.included_requirements
-            ],
-            'excluded': [
-                {
-                    'keyword': req.keyword,
-                    'operator': req.operator,
-                    'value': req.value
-                }
-                for req in self.excluded_requirements
-            ]
+            'included': [req.to_dict() for req in self.included_requirements],
+            'excluded': [req.to_dict() for req in self.excluded_requirements]
         }
 
 

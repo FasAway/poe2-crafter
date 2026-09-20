@@ -2,6 +2,7 @@
 
 import json
 import queue
+import threading
 import time
 from typing import Dict, Optional
 from pathlib import Path
@@ -14,6 +15,8 @@ except ImportError:
     print("[GUI] 警告: customtkinter 未安装")
 
 from core.crafter import Crafter, CraftingState
+from core.affix_db import AffixDB, ITEM_PAGES
+from core.parser import AffixRequirement
 
 
 # 配色
@@ -58,8 +61,8 @@ class MainWindow:
         self.crafter = Crafter()
 
         # 配置目录
-        self.config_dir = Path(__file__).parent.parent / "config"
-        self.config_dir.mkdir(exist_ok=True)
+        from core.paths import config_dir
+        self.config_dir = config_dir()
 
         # 坐标捕获状态
         self.capturing = False
@@ -68,6 +71,11 @@ class MainWindow:
         self.mouse_listener = None
         self.key_listener = None
         self.hotkey_listener = None
+
+        # 词缀数据库与爬取状态
+        self.affix_db = AffixDB()
+        self._crawling = False
+        self._crawl_stop = False
 
         # UI线程安全队列
         self._ui_queue = queue.Queue()
@@ -234,57 +242,263 @@ class MainWindow:
                       command=self._load_coords).grid(row=0, column=1)
 
     def _build_affix_tab(self):
-        """词缀条件Tab"""
+        """词缀条件Tab（词缀库 + 手动输入双模式）"""
         tab = self.tabs.add("词缀条件")
-        tab.grid_rowconfigure(2, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
         tab.grid_columnconfigure(0, weight=1)
 
-        # 类型选择
+        # 模式切换
+        self.affix_mode_btn = ctk.CTkSegmentedButton(
+            tab, values=["词缀库选择", "手动输入"], font=("Microsoft YaHei UI", 13),
+            command=self._on_affix_mode)
+        self.affix_mode_btn.set("词缀库选择")
+        self.affix_mode_btn.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
+
+        # ---------- 词缀库模式 ----------
+        self.lib_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        self.lib_frame.grid(row=1, column=0, sticky="nsew")
+        self.lib_frame.grid_rowconfigure(2, weight=1)
+        self.lib_frame.grid_columnconfigure(0, weight=1)
+
+        # 类型选择 + 更新数据
+        row0 = ctk.CTkFrame(self.lib_frame, fg_color="transparent")
+        row0.grid(row=0, column=0, sticky="ew", padx=4, pady=2)
+        row0.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row0, text="装备类型", font=("Microsoft YaHei UI", 12),
+                     text_color=COLOR_TEXT_DIM).grid(row=0, column=0, padx=(6, 6))
+        self.item_type_combo = ctk.CTkComboBox(row0, values=["(无数据)"], width=140,
+                                               font=("Microsoft YaHei UI", 13),
+                                               command=self._on_item_type_changed)
+        self.item_type_combo.grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(row0, text="搜索", font=("Microsoft YaHei UI", 12),
+                     text_color=COLOR_TEXT_DIM).grid(row=0, column=2, padx=(12, 4))
+        self.affix_search = ctk.CTkEntry(row0, width=110, placeholder_text="关键词过滤",
+                                         font=("Microsoft YaHei UI", 12))
+        self.affix_search.grid(row=0, column=3)
+        self.affix_search.bind("<KeyRelease>", lambda e: self._render_group_list())
+        self.crawl_btn = ctk.CTkButton(row0, text="更新数据", width=80, height=28,
+                                       corner_radius=6, fg_color="#4a5364",
+                                       hover_color="#3c4452",
+                                       command=self._start_crawl)
+        self.crawl_btn.grid(row=0, column=4, padx=6)
+
+        # 词缀组列表
+        list_frame = ctk.CTkFrame(self.lib_frame, corner_radius=10, fg_color="#16191e")
+        list_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        self.group_scroll = ctk.CTkScrollableFrame(list_frame, fg_color="transparent")
+        self.group_scroll.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+
+        # T阶选择行
+        row3 = ctk.CTkFrame(self.lib_frame, fg_color="transparent")
+        row3.grid(row=3, column=0, sticky="ew", padx=4, pady=(2, 8))
+        row3.grid_columnconfigure(4, weight=1)
+        ctk.CTkLabel(row3, text="T阶", font=("Microsoft YaHei UI", 12),
+                     text_color=COLOR_TEXT_DIM).grid(row=0, column=0, padx=(6, 4))
+        self.tier_combo = ctk.CTkComboBox(row3, values=["(先选词缀)"], width=190,
+                                          font=("Microsoft YaHei UI", 12), state="disabled")
+        self.tier_combo.grid(row=0, column=1, padx=2)
+        self.tier_type_btn = ctk.CTkSegmentedButton(
+            row3, values=["包含", "排除"], width=120,
+            font=("Microsoft YaHei UI", 12))
+        self.tier_type_btn.set("包含")
+        self.tier_type_btn.grid(row=0, column=2, padx=6)
+        ctk.CTkButton(row3, text="＋ 添加", width=80, height=30, corner_radius=6,
+                      fg_color=COLOR_ACCENT, hover_color="#27885f",
+                      font=("Microsoft YaHei UI", 12, "bold"),
+                      command=self._add_tier_requirement).grid(row=0, column=3)
+
+        # ---------- 手动输入模式 ----------
+        self.manual_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        self.manual_frame.grid_rowconfigure(2, weight=1)
+        self.manual_frame.grid_columnconfigure(0, weight=1)
+
         self.req_type = ctk.CTkSegmentedButton(
-            tab, values=["包含 (满足才停)", "排除 (出现即停)"],
+            self.manual_frame, values=["包含 (满足才停)", "排除 (出现即停)"],
             font=("Microsoft YaHei UI", 13))
         self.req_type.set("包含 (满足才停)")
-        self.req_type.grid(row=0, column=0, sticky="w", padx=10, pady=(12, 6))
+        self.req_type.grid(row=0, column=0, sticky="w", padx=4, pady=(4, 4))
 
-        # 输入行
-        input_row = ctk.CTkFrame(tab, corner_radius=10, fg_color="#2b303b")
-        input_row.grid(row=1, column=0, sticky="ew", padx=10, pady=6)
+        input_row = ctk.CTkFrame(self.manual_frame, corner_radius=10, fg_color="#2b303b")
+        input_row.grid(row=1, column=0, sticky="ew", padx=4, pady=6)
         input_row.grid_columnconfigure(1, weight=1)
-
         ctk.CTkLabel(input_row, text="关键词", font=("Microsoft YaHei UI", 12),
                      text_color=COLOR_TEXT_DIM).grid(row=0, column=0, padx=(12, 6), pady=10)
-        self.keyword_entry = ctk.CTkEntry(input_row, placeholder_text="如: 生命 / 冰冷抗性 / 伤害",
+        self.keyword_entry = ctk.CTkEntry(input_row, placeholder_text="如: 生命 / 冰冷抗性",
                                           font=("Microsoft YaHei UI", 13))
         self.keyword_entry.grid(row=0, column=1, sticky="ew", padx=4, pady=10)
-
         self.operator_combo = ctk.CTkComboBox(input_row, values=[">=", ">", "<=", "<", "==", "!="],
                                               width=70, font=("Consolas", 13))
         self.operator_combo.set(">=")
         self.operator_combo.grid(row=0, column=2, padx=4, pady=10)
-
         self.value_entry = ctk.CTkEntry(input_row, placeholder_text="数值", width=70,
                                         font=("Consolas", 13))
         self.value_entry.grid(row=0, column=3, padx=4, pady=10)
-
         ctk.CTkButton(input_row, text="＋ 添加", width=80, height=32, corner_radius=6,
                       fg_color=COLOR_ACCENT, hover_color="#27885f",
                       font=("Microsoft YaHei UI", 12, "bold"),
                       command=self._add_requirement).grid(row=0, column=4, padx=(4, 12), pady=10)
 
-        # 需求列表
-        list_frame = ctk.CTkFrame(tab, corner_radius=10, fg_color="#16191e")
-        list_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=6)
-        list_frame.grid_rowconfigure(0, weight=1)
-        list_frame.grid_columnconfigure(0, weight=1)
-
-        self.req_scroll = ctk.CTkScrollableFrame(list_frame, fg_color="transparent")
-        self.req_scroll.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-
-        btns = ctk.CTkFrame(tab, fg_color="transparent")
-        btns.grid(row=3, column=0, sticky="ew", padx=10, pady=(6, 12))
-        ctk.CTkButton(btns, text="清空全部", width=100, height=30, corner_radius=6,
+        # ---------- 已添加条件列表（两种模式共用） ----------
+        cond_frame = ctk.CTkFrame(tab, corner_radius=10, fg_color="#16191e")
+        cond_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=(4, 8))
+        cond_frame.grid_rowconfigure(1, weight=1)
+        cond_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(cond_frame, text="已添加条件", font=("Microsoft YaHei UI", 12, "bold"),
+                     text_color=COLOR_TEXT_DIM).grid(row=0, column=0, sticky="w", padx=10, pady=(6, 0))
+        self.req_scroll = ctk.CTkScrollableFrame(cond_frame, fg_color="transparent", height=110)
+        self.req_scroll.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+        ctk.CTkButton(cond_frame, text="清空全部", width=90, height=26, corner_radius=6,
                       fg_color=COLOR_DANGER, hover_color="#992d21",
-                      command=self._clear_requirements).grid(row=0, column=0)
+                      command=self._clear_requirements).grid(row=2, column=0, sticky="e",
+                                                             padx=8, pady=(0, 6))
+
+        # 初始化
+        self.current_groups = []
+        self.selected_group = None
+        self._refresh_item_types()
+
+    # ---------- 词缀库模式逻辑 ----------
+
+    def _on_affix_mode(self, mode):
+        """切换词缀库/手动输入模式"""
+        if mode == "词缀库选择":
+            self.manual_frame.grid_forget()
+            self.lib_frame.grid(row=1, column=0, sticky="nsew")
+        else:
+            self.lib_frame.grid_forget()
+            self.manual_frame.grid(row=1, column=0, sticky="nsew")
+
+    def _item_key_by_display(self, display: str) -> Optional[str]:
+        """通过显示名找item key"""
+        name = display.split(' (')[0]
+        for key, cn, _ in self.item_types:
+            if cn == name:
+                return key
+        return None
+
+    def _refresh_item_types(self):
+        """刷新装备类型下拉框"""
+        self.item_types = self.affix_db.get_available_item_types()
+        displays = [f"{cn} ({n})" for _, cn, n in self.item_types]
+        if not displays:
+            displays = ["(无数据，请点击更新数据)"]
+        self.item_type_combo.configure(values=displays)
+        # 记住当前选择
+        current = self.item_type_combo.get()
+        if current not in displays:
+            self.item_type_combo.set(displays[0])
+        self._on_item_type_changed(self.item_type_combo.get())
+
+    def _on_item_type_changed(self, display: str):
+        """切换装备类型，重新加载词缀组"""
+        key = self._item_key_by_display(display)
+        self.current_item_key = key
+        if not key:
+            self.current_groups = []
+        else:
+            self.current_groups = self.affix_db.get_affix_groups(key)
+        self.selected_group = None
+        self.tier_combo.configure(values=["(先选词缀)"], state="disabled")
+        self._render_group_list()
+
+    def _render_group_list(self):
+        """渲染词缀组列表"""
+        for child in self.group_scroll.winfo_children():
+            child.destroy()
+
+        keyword = self.affix_search.get().strip() if hasattr(self, 'affix_search') else ''
+        groups = [g for g in self.current_groups
+                  if not keyword or keyword in g['effect'] or keyword in g['mod_type']]
+
+        if not groups:
+            ctk.CTkLabel(self.group_scroll, text="无匹配词缀",
+                         text_color=COLOR_TEXT_DIM).grid(row=0, column=0, pady=12)
+            return
+
+        for i, g in enumerate(groups[:80]):  # 限制渲染数量
+            tiers = g['tiers']
+            t1 = tiers[0]
+            type_cn = "前缀" if g['mod_type'] == 'prefix' else "后缀"
+            lo = int(t1['lo']) if t1['lo'] == int(t1['lo']) else t1['lo']
+            hi = int(t1['hi']) if t1['hi'] == int(t1['hi']) else t1['hi']
+            text = f"{g['effect']}  [{type_cn}]  T1~T{len(tiers)}  T1数值:{lo}~{hi}"
+
+            row = ctk.CTkFrame(self.group_scroll, corner_radius=8,
+                               fg_color="#2b303b" if g is not self.selected_group else "#3a4a63")
+            row.grid(row=i, column=0, sticky="ew", pady=2, padx=2)
+            row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=text, font=("Microsoft YaHei UI", 12),
+                         anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+            ctk.CTkButton(row, text="选择", width=52, height=24, corner_radius=6,
+                          fg_color="#3a6ea5", hover_color="#2f5a87", font=("", 11),
+                          command=lambda g=g: self._select_group(g)).grid(
+                row=0, column=1, padx=(0, 8), pady=5)
+
+    def _select_group(self, group: Dict):
+        """选中词缀组，填充T阶下拉框"""
+        self.selected_group = group
+        values = []
+        for t in group['tiers']:
+            lo = int(t['lo']) if t['lo'] == int(t['lo']) else t['lo']
+            hi = int(t['hi']) if t['hi'] == int(t['hi']) else t['hi']
+            values.append(f"T{t['tier']} ({lo}~{hi})")
+        self.tier_combo.configure(values=values, state="normal")
+        self.tier_combo.set(values[0])
+        self._render_group_list()
+
+    def _add_tier_requirement(self):
+        """添加T阶需求"""
+        if not self.selected_group:
+            self._log("请先在列表中选择词缀")
+            return
+        sel = self.tier_combo.get()
+        try:
+            idx = self.tier_combo.cget("values").index(sel)
+        except (ValueError, AttributeError):
+            self._log("请选择T阶")
+            return
+        tier = self.selected_group['tiers'][idx]
+        is_include = self.tier_type_btn.get() == "包含"
+
+        self.crafter.checker.add_tier_requirement(
+            self.selected_group['effect'], tier['tier'],
+            tier['lo'], tier['hi'], is_include)
+        self._refresh_requirements()
+        self._log(f"已添加: {self.selected_group['effect']} T{tier['tier']} "
+                  f"({'包含' if is_include else '排除'})")
+
+    # ---------- 数据更新（爬取） ----------
+
+    def _start_crawl(self):
+        """后台线程爬取装备词缀数据"""
+        if self._crawling:
+            self._log("正在更新中，请稍候...")
+            return
+        if not self.affix_db:
+            self._log("词缀数据库不可用")
+            return
+
+        self._crawling = True
+        self.crawl_btn.configure(state="disabled", text="更新中...")
+        self._log("[更新] 开始爬取词缀数据（武器/副手/护甲/饰品，约2分钟）...")
+
+        keys = [k for k in ITEM_PAGES.keys()]
+        from core.affix_db import AffixDB
+
+        def worker():
+            try:
+                AffixDB.crawl(
+                    keys,
+                    progress_cb=lambda m: self._ui_queue.put(("log", m)),
+                    stop_cb=lambda: self._crawl_stop)
+                self._ui_queue.put(("crawl_done", None, None, None))
+            except Exception as e:
+                self._ui_queue.put(("log", f"[更新] 失败: {e}"))
+                self._ui_queue.put(("crawl_done", None, None, None))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_settings_tab(self):
         """设置Tab"""
@@ -379,7 +593,15 @@ class MainWindow:
     def _handle_ui_event(self, item: tuple):
         """处理来自队列的UI事件"""
         kind = item[0]
-        if kind == "hotkey":
+        if kind == "log":
+            self._log(item[1])
+        elif kind == "crawl_done":
+            self._crawling = False
+            self.crawl_btn.configure(state="normal", text="更新数据")
+            self.affix_db.reload()
+            self._refresh_item_types()
+            self._log("[更新] 词缀数据更新完成")
+        elif kind == "hotkey":
             action = item[1]
             if action == "start":
                 self._on_start()
@@ -568,11 +790,9 @@ class MainWindow:
 
         rows = []
         for i, req in enumerate(self.crafter.checker.included_requirements):
-            value_str = f" {req.operator} {req.value}" if req.value is not None else ""
-            rows.append((f"包含  {req.keyword}{value_str}", i, True))
+            rows.append((req.display(), i, True))
         for i, req in enumerate(self.crafter.checker.excluded_requirements):
-            value_str = f" {req.operator} {req.value}" if req.value is not None else ""
-            rows.append((f"排除  {req.keyword}{value_str}", i, False))
+            rows.append((req.display(), i, False))
 
         if not rows:
             ctk.CTkLabel(self.req_scroll, text="暂无条件，在上方添加",
@@ -655,11 +875,13 @@ class MainWindow:
             if 'requirements' in config:
                 self.crafter.checker.clear_requirements()
                 for req in config['requirements'].get('included', []):
-                    self.crafter.checker.add_requirement(
-                        req['keyword'], req.get('operator', '>='), req.get('value'), True)
+                    r = AffixRequirement.from_dict(req)
+                    r.is_include = True
+                    self.crafter.checker.included_requirements.append(r)
                 for req in config['requirements'].get('excluded', []):
-                    self.crafter.checker.add_requirement(
-                        req['keyword'], req.get('operator', '>='), req.get('value'), False)
+                    r = AffixRequirement.from_dict(req)
+                    r.is_include = False
+                    self.crafter.checker.excluded_requirements.append(r)
                 self._refresh_requirements()
 
             if 'settings' in config:

@@ -13,6 +13,7 @@ a = Analysis(
     binaries=ctk_binaries,
     datas=[
         ('config', 'config'),
+        ('data', 'data'),
     ] + ctk_datas,
     hiddenimports=[
         'pyperclip',
