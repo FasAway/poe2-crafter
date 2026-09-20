@@ -35,6 +35,8 @@ class InputSimulator:
             self.method = 'none'
         print(f"[输入模拟] 使用方法: {self.method}")
 
+        self.last_error = None
+
         if PYNPUT_AVAILABLE:
             self._mouse = pynput_mouse.Controller()
             self._keyboard = pynput_keyboard.Controller()
@@ -73,6 +75,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 移动鼠标失败: {e}")
             return False
 
@@ -88,6 +91,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 左键点击失败: {e}")
             return False
 
@@ -103,6 +107,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 右键点击失败: {e}")
             return False
 
@@ -119,6 +124,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 按下按键失败: {e}")
             return False
 
@@ -133,6 +139,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 松开按键失败: {e}")
             return False
 
@@ -155,6 +162,7 @@ class InputSimulator:
                 return False
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] 组合键失败: {e}")
             return False
 
@@ -187,6 +195,7 @@ class InputSimulator:
             self.key_up('shift')
             return True
         except Exception as e:
+            self.last_error = str(e)
             print(f"[输入模拟] Shift+点击失败: {e}")
             try:
                 self.key_up('shift')

@@ -39,6 +39,7 @@ class Crafter:
         self.attempt_count = 0
         self.max_attempts = 100
         self.start_time = None
+        self.debug = False
         
         # 延迟设置
         self.delay_min = 0.15
@@ -55,11 +56,12 @@ class Crafter:
         self.on_attempt: Optional[Callable] = None
         self.on_success: Optional[Callable] = None
         self.on_error: Optional[Callable] = None
+        self.on_log: Optional[Callable] = None
         
         print("[洗练器] 初始化完成")
     
     def set_callbacks(self, on_status_change=None, on_attempt=None,
-                     on_success=None, on_error=None):
+                     on_success=None, on_error=None, on_log=None):
         """设置回调函数
         
         Args:
@@ -67,11 +69,13 @@ class Crafter:
             on_attempt: 尝试次数回调
             on_success: 成功回调
             on_error: 错误回调
+            on_log: debug日志回调
         """
         self.on_status_change = on_status_change
         self.on_attempt = on_attempt
         self.on_success = on_success
         self.on_error = on_error
+        self.on_log = on_log
     
     def _update_state(self, new_state: str, message: str = ""):
         """更新状态
@@ -85,13 +89,15 @@ class Crafter:
             self.on_status_change(new_state, message)
     
     def _log(self, message: str):
-        """打印日志
+        """打印日志（debug模式下同时输出到GUI）
         
         Args:
             message: 日志消息
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"[{timestamp}] {message}")
+        if self.debug and self.on_log:
+            self.on_log(message)
     
     def start(self):
         """开始洗练"""
@@ -178,8 +184,10 @@ class Crafter:
             try:
                 self._do_craft()
             except Exception as e:
+                import traceback
                 self._update_state(CraftingState.ERROR, f"洗练错误: {e}")
-                self._log(f"洗练错误: {e}")
+                if self.debug:
+                    self._log(traceback.format_exc())
                 break
         
         self._log("退出洗练循环")
@@ -194,43 +202,48 @@ class Crafter:
         
         self._log(f"第 {self.attempt_count} 次洗练")
         
-        # 1. 鼠标悬停在物品上
-        self._log("  鼠标悬停在物品上...")
+        # 1. 鼠标悬停在物品上（等待游戏tooltip渲染）
+        self._log("  [1/5] 悬停物品...")
         if not self.actions.hover_over_item(item_x, item_y):
-            raise Exception("鼠标悬停失败")
+            raise Exception(f"鼠标移动失败: {self.simulator.last_error or '输入模拟不可用'}")
         
-        time.sleep(0.1)
+        time.sleep(0.35)
         
-        # 2. Ctrl+C 复制物品信息
-        self._log("  复制物品信息...")
+        # 2. 清空剪贴板 → Ctrl+C → 轮询等待剪贴板出现内容
+        self._log("  [2/5] 复制物品信息...")
+        self.clipboard.set_text("")
         if not self.actions.copy_item_info():
-            raise Exception("复制失败")
+            raise Exception(f"Ctrl+C 发送失败: {self.simulator.last_error or '输入模拟不可用'}")
         
-        time.sleep(0.2)
+        text = None
+        for _ in range(20):  # 最多等2秒
+            time.sleep(0.1)
+            t = self.clipboard.get_text()
+            if t and t.strip():
+                text = t.strip()
+                break
         
-        # 3. 从剪贴板读取文本
-        self._log("  读取剪贴板...")
-        text = self.clipboard.get_text()
         if not text:
-            raise Exception("剪贴板为空")
+            raise Exception("剪贴板无内容。排查: ①鼠标是否悬停到物品上且tooltip已显示 "
+                            "②游戏若以管理员运行,本工具也需管理员运行 ③按F10暂停后手动Ctrl+C测试")
         
-        # 4. 解析物品
-        self._log("  解析物品词缀...")
+        self._log(f"  [3/5] 获取文本 {len(text)} 字符")
+        
+        # 3. 解析物品
         item = self.parser.parse_item(text)
         affixes = item['affixes']
         
-        self._log(f"  找到 {len(affixes)} 个词缀")
+        self._log(f"  [4/5] 解析到 {len(affixes)} 个词缀")
         for affix in affixes:
             self._log(f"    - {affix.raw_text}")
         
-        # 5. 检查词缀条件
-        self._log("  检查词缀条件...")
+        # 4. 检查词缀条件
         result = self.checker.check(affixes)
         
         if self.on_attempt:
             self.on_attempt(self.attempt_count, item, result)
         
-        # 6. 判断是否满足条件
+        # 5. 判断是否满足条件
         if result['satisfied']:
             self._stop_event.set()
             self._update_state(CraftingState.SUCCESS, 
@@ -240,16 +253,15 @@ class Crafter:
                 self.on_success(self.attempt_count, item, result)
             return
         
-        self._log(f"  ✗ 不满足条件，继续...")
+        self._log(f"  ✗ 不满足: {'; '.join(result['details']) if result['details'] else '继续'}")
         
-        # 7. 执行洗练操作
-        self._log("  执行洗练操作...")
+        # 6. 执行洗练操作
         if not self.actions.craft_cycle(currency_x, currency_y, item_x, item_y):
-            raise Exception("洗练操作失败")
+            raise Exception("洗练操作失败（点击通货/物品未成功）")
         
-        # 8. 随机延迟
+        # 7. 随机延迟
         delay = self.simulator.random_delay(self.delay_min, self.delay_max)
-        self._log(f"  等待 {delay:.2f} 秒...")
+        self._log(f"  等待 {delay:.2f}s 后下一轮")
     
     def get_status(self) -> Dict:
         """获取状态信息

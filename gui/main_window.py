@@ -94,6 +94,7 @@ class MainWindow:
             on_attempt=lambda c, i, r: self._ui_queue.put(("attempt", c, i, r)),
             on_success=lambda c, i, r: self._ui_queue.put(("success", c, i, r)),
             on_error=lambda e: self._ui_queue.put(("error", e, None, None)),
+            on_log=lambda m: self._ui_queue.put(("log", m)),
         )
 
         self._build_ui()
@@ -102,7 +103,10 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._log("程序启动")
-        self._log("提示: 配置坐标和词缀条件后，点击开始或按 F9")
+        env = self.crafter.simulator.method
+        clip = self.crafter.clipboard.method
+        self._log(f"环境: 输入={env} 剪贴板={clip}")
+        self._log("提示: 配置坐标和词缀条件后，点击开始或按 F9；出错时开启Debug模式并点自检")
         self.root.after(100, self._poll)
 
     # ==================== UI 构建 ====================
@@ -551,6 +555,17 @@ class MainWindow:
                       fg_color="#4a5364", hover_color="#3c4452",
                       command=self._test_parse).grid(row=0, column=3)
 
+        # Debug 与自检
+        row5 = ctk.CTkFrame(tab, fg_color="transparent")
+        row5.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 12))
+        self.debug_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(row5, text="Debug模式（洗练每一步输出到日志）",
+                        variable=self.debug_var, font=("Microsoft YaHei UI", 12),
+                        command=self._apply_settings).grid(row=0, column=0)
+        ctk.CTkButton(row5, text="🔍 自检", width=90, height=28, corner_radius=6,
+                      fg_color="#3a6ea5", hover_color="#2f5a87",
+                      command=self._run_selftest).grid(row=0, column=1, padx=(16, 0))
+
     # ==================== 日志与状态 ====================
 
     def _log(self, message: str):
@@ -840,6 +855,68 @@ class MainWindow:
             self.crafter.delay_max = float(self.delay_max_entry.get())
         except ValueError:
             pass
+        try:
+            self.crafter.debug = self.debug_var.get()
+        except Exception:
+            pass
+
+    def _run_selftest(self):
+        """自检：逐项排查输入/剪贴板/权限问题"""
+        self._log("========== 自检开始 ==========")
+
+        # 1. 输入模拟方式
+        sim = self.crafter.simulator
+        ok = sim.method != 'none'
+        self._log(f"[1] 输入模拟: {sim.method} {'✓' if ok else '✗ 不可用!'}")
+        if not ok:
+            self._log("    → 打包缺少 pynput/pydirectinput，请反馈")
+
+        # 2. 管理员权限检测（游戏以管理员运行时必须同权限）
+        try:
+            import ctypes
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+            self._log(f"[2] 管理员权限: {'✓ 已获取' if is_admin else '⚠ 未以管理员运行'}")
+            if not is_admin:
+                self._log("    → 若游戏以管理员运行，输入会被系统拦截：右键exe→属性→兼容性→勾选以管理员运行")
+        except Exception:
+            self._log("[2] 管理员权限: 无法检测(非Windows)")
+
+        # 3. 鼠标移动验证（发送指令后读回位置）
+        try:
+            pos0 = sim.get_mouse_position()
+            sim.move_to(pos0[0] + 40, pos0[1] + 40, jitter=0)
+            time.sleep(0.15)
+            pos1 = sim.get_mouse_position()
+            moved = abs(pos1[0] - pos0[0] - 40) < 15 and abs(pos1[1] - pos0[1] - 40) < 15
+            self._log(f"[3] 鼠标移动: {pos0} -> {pos1} {'✓' if moved else '✗ 未生效(可能被游戏/权限拦截)'}")
+            sim.move_to(pos0[0], pos0[1], jitter=0)
+        except Exception as e:
+            self._log(f"[3] 鼠标移动: ✗ 异常 {e}")
+
+        # 4. 剪贴板读写验证
+        try:
+            probe = f"SELFTEST_{int(time.time())}"
+            self.crafter.clipboard.set_text(probe)
+            got = self.crafter.clipboard.get_text()
+            self._log(f"[4] 剪贴板读写: {'✓' if got == probe else '✗ 失败: ' + repr(got[:30])}")
+        except Exception as e:
+            self._log(f"[4] 剪贴板读写: ✗ 异常 {e}")
+
+        # 5. Ctrl+C 发送验证（需手动配合）
+        self._log("[5] 复制测试: 请打开游戏把鼠标悬停在物品上，3秒后自动Ctrl+C...")
+        def delayed_copy():
+            time.sleep(3)
+            self.crafter.clipboard.set_text("")
+            self.crafter.actions.copy_item_info()
+            time.sleep(0.8)
+            text = self.crafter.clipboard.get_text()
+            if text and text.strip():
+                self._ui_queue.put(("log", f"[5] Ctrl+C复制: ✓ 拿到 {len(text)} 字符: {text.strip()[:40]}..."))
+            else:
+                self._ui_queue.put(("log", "[5] Ctrl+C复制: ✗ 剪贴板仍为空 → 输入未到达游戏(权限/焦点问题)"))
+        threading.Thread(target=delayed_copy, daemon=True).start()
+
+        self._log("========== 自检进行中 ==========")
 
     def _save_coords(self):
         self.crafter.coordinates.save()
