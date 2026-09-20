@@ -1,18 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
+
+# customtkinter 需要打包其主题JSON数据文件
+ctk_datas, ctk_binaries, ctk_hiddenimports = collect_all('customtkinter')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=ctk_binaries,
     datas=[
         ('config', 'config'),
-    ],
+    ] + ctk_datas,
     hiddenimports=[
         'pyperclip',
-        'pyautogui',
-        'PySimpleGUI',
         'pynput',
         'pynput._util',
         'pynput._util.win32',
@@ -20,7 +23,8 @@ a = Analysis(
         'pynput.keyboard._win32',
         'pynput.mouse',
         'pynput.mouse._win32',
-    ],
+        'pydirectinput',
+    ] + ctk_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -28,6 +32,13 @@ a = Analysis(
         'matplotlib',
         'pandas',
         'scipy',
+        'numpy',
+        'PIL',
+        'pyautogui',
+        'unittest',
+        'test',
+        'setuptools',
+        'pip',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -49,13 +60,17 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[
+        'python311.dll',
+        'vcruntime140.dll',
+        'vcruntime140_1.dll',
+    ],
     runtime_tmpdir=None,
-    console=False,  # 不显示控制台窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # 可以添加图标文件路径
+    icon=None,
 )

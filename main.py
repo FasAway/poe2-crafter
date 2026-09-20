@@ -37,7 +37,7 @@ def run_gui():
     except ImportError as e:
         print(f"启动失败: {e}")
         print("\n请确保已安装所有依赖:")
-        print("pip install pyperclip pyautogui PySimpleGUI")
+        print("pip install -r requirements.txt")
         sys.exit(1)
     except Exception as e:
         print(f"运行错误: {e}")

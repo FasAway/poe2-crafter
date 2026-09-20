@@ -1,11 +1,7 @@
 # 核心依赖
 pyperclip>=1.8.0
-pyautogui>=0.9.54
 pynput>=1.7.6
+pydirectinput>=1.0.4; sys_platform == 'win32'
 
 # GUI依赖
-PySimpleGUI>=5.0.0
-
-# Windows专用（可选）
-# pydirectinput>=1.0.4
-# pywin32>=305
+customtkinter>=5.2.2

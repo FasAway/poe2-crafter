@@ -232,6 +232,7 @@ class Crafter:
         
         # 6. 判断是否满足条件
         if result['satisfied']:
+            self._stop_event.set()
             self._update_state(CraftingState.SUCCESS, 
                              f"满足条件! 第 {self.attempt_count} 次")
             self._log(f"  ✓ 满足条件!")
