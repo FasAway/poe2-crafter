@@ -1,6 +1,7 @@
 # 核心依赖
 pyperclip>=1.8.0
 pyautogui>=0.9.54
+pynput>=1.7.6
 
 # GUI依赖
 PySimpleGUI>=5.0.0

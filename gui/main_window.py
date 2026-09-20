@@ -38,6 +38,13 @@ class MainWindow:
         # 窗口
         self.window = None
         
+        # 坐标捕获状态
+        self.capturing = False
+        self.capture_target = None
+        self.pending_capture = None
+        self.mouse_listener = None
+        self.key_listener = None
+        
         # 设置回调
         self.crafter.set_callbacks(
             on_status_change=self._on_status_change,
@@ -58,16 +65,18 @@ class MainWindow:
              sg.Input(key='-CURRENCY_Y-', size=(8, 1)),
              sg.Text('Y'),
              sg.Push(),
-             sg.Button('获取鼠标位置', key='-GET_CURRENCY-')],
+             sg.Button('点击捕获通货坐标', key='-GET_CURRENCY-')],
             [sg.Text('物品位置:', size=(10, 1)),
              sg.Input(key='-ITEM_X-', size=(8, 1)),
              sg.Text('X'),
              sg.Input(key='-ITEM_Y-', size=(8, 1)),
              sg.Text('Y'),
              sg.Push(),
-             sg.Button('获取鼠标位置', key='-GET_ITEM-')],
+             sg.Button('点击捕获物品坐标', key='-GET_ITEM-')],
             [sg.Button('保存坐标', key='-SAVE_COORD-'),
              sg.Button('加载坐标', key='-LOAD_COORD-'),
+             sg.Text('提示: 点击捕获按钮后，用鼠标点击目标位置即可记录坐标',
+                    text_color='lightgray'),
              sg.Push()]
         ], expand_x=True)
         
@@ -208,6 +217,110 @@ class MainWindow:
         pos = pyautogui.position()
         return (pos.x, pos.y)
     
+    def _start_capture(self, target: str):
+        """开始坐标捕获模式
+        
+        进入捕获模式后，用户在任意位置点击鼠标左键，
+        即可记录该点击位置的XY坐标（点击会被拦截，不影响游戏）。
+        按 ESC 取消捕获。
+        
+        Args:
+            target: 捕获目标 ('currency' 或 'item')
+        """
+        # 已在捕获模式时，再次点击按钮取消捕获
+        if self.capturing:
+            self.pending_capture = ('cancel', 0, 0)
+            self.capturing = False
+            return
+        
+        target_name = '通货' if target == 'currency' else '物品'
+        self.capturing = True
+        self.capture_target = target
+        
+        self._log(f"[捕获] 请点击{target_name}位置（该点击不会生效，ESC取消）...")
+        if self.window:
+            self.window['-STATUS-'].update(f"状态: 等待点击捕获{target_name}坐标")
+        
+        def on_click(x, y, button, pressed):
+            if not self.capturing:
+                return True
+            if pressed:
+                # 记录坐标，拦截此次点击
+                self.pending_capture = (target, int(x), int(y))
+                self.capturing = False
+                return False  # 抑制该点击并停止监听
+            return True  # 放行释放事件
+        
+        def on_press(key):
+            from pynput import keyboard
+            if key == keyboard.Key.esc:
+                self.pending_capture = ('cancel', 0, 0)
+                self.capturing = False
+                return False  # 停止键盘监听
+            return True
+        
+        try:
+            from pynput import mouse, keyboard
+            try:
+                # 优先使用抑制模式：捕获点击不会传递到游戏
+                self.mouse_listener = mouse.Listener(on_click=on_click, suppress=True)
+                self.mouse_listener.start()
+            except Exception:
+                self.mouse_listener = mouse.Listener(on_click=on_click)
+                self.mouse_listener.start()
+                self._log("[捕获] 注意: 无法拦截点击，捕获点击会同时作用于游戏")
+            
+            self.key_listener = keyboard.Listener(on_press=on_press)
+            self.key_listener.start()
+        except Exception as e:
+            # 回退方案：直接获取当前鼠标位置
+            self._log(f"[捕获] 捕获模式启动失败: {e}，改为获取当前鼠标位置")
+            self.capturing = False
+            x, y = self._get_mouse_position()
+            self.pending_capture = (target, x, y)
+    
+    def _stop_capture(self):
+        """停止坐标捕获"""
+        self.capturing = False
+        for listener in (self.mouse_listener, self.key_listener):
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception:
+                    pass
+        self.mouse_listener = None
+        self.key_listener = None
+    
+    def _process_pending_capture(self):
+        """处理捕获结果（在主事件循环中调用，保证线程安全）"""
+        if self.pending_capture is None:
+            return
+        
+        target, x, y = self.pending_capture
+        self.pending_capture = None
+        self._stop_capture()
+        
+        if not self.window:
+            return
+        
+        if target == 'cancel':
+            self._log("[捕获] 已取消")
+            self.window['-STATUS-'].update("状态: 空闲")
+            return
+        
+        if target == 'currency':
+            self.crafter.coordinates.set_currency_position(x, y)
+            self.window['-CURRENCY_X-'].update(x)
+            self.window['-CURRENCY_Y-'].update(y)
+            self._log(f"通货位置已捕获: ({x}, {y})")
+        else:
+            self.crafter.coordinates.set_item_position(x, y)
+            self.window['-ITEM_X-'].update(x)
+            self.window['-ITEM_Y-'].update(y)
+            self._log(f"物品位置已捕获: ({x}, {y})")
+        
+        self.window['-STATUS-'].update("状态: 空闲")
+    
     def _update_coord_display(self):
         """更新坐标显示"""
         if self.window:
@@ -318,23 +431,18 @@ class MainWindow:
         while True:
             event, values = self.window.read(timeout=100)
             
+            # 处理坐标捕获结果
+            self._process_pending_capture()
+            
             if event == sg.WIN_CLOSED:
                 break
             
             # 坐标配置
             elif event == '-GET_CURRENCY-':
-                x, y = self._get_mouse_position()
-                self.crafter.coordinates.set_currency_position(x, y)
-                self.window['-CURRENCY_X-'].update(x)
-                self.window['-CURRENCY_Y-'].update(y)
-                self._log(f"通货位置已设置: ({x}, {y})")
+                self._start_capture('currency')
             
             elif event == '-GET_ITEM-':
-                x, y = self._get_mouse_position()
-                self.crafter.coordinates.set_item_position(x, y)
-                self.window['-ITEM_X-'].update(x)
-                self.window['-ITEM_Y-'].update(y)
-                self._log(f"物品位置已设置: ({x}, {y})")
+                self._start_capture('item')
             
             elif event == '-SAVE_COORD-':
                 self.crafter.coordinates.save()
@@ -420,6 +528,7 @@ class MainWindow:
                 self._log("紧急停止!")
         
         # 清理
+        self._stop_capture()
         self.crafter.stop()
         self.window.close()
     
