@@ -4,6 +4,7 @@ import json
 import queue
 import threading
 import time
+import tkinter as tk
 from typing import Dict, Optional
 from pathlib import Path
 
@@ -275,20 +276,30 @@ class MainWindow:
         self.affix_search = ctk.CTkEntry(row0, width=110, placeholder_text="关键词过滤",
                                          font=("Microsoft YaHei UI", 12))
         self.affix_search.grid(row=0, column=3)
-        self.affix_search.bind("<KeyRelease>", lambda e: self._render_group_list())
+        self._search_job = None
+        self.affix_search.bind("<KeyRelease>", self._on_search_key)
         self.crawl_btn = ctk.CTkButton(row0, text="更新数据", width=80, height=28,
                                        corner_radius=6, fg_color="#4a5364",
                                        hover_color="#3c4452",
                                        command=self._start_crawl)
         self.crawl_btn.grid(row=0, column=4, padx=6)
 
-        # 词缀组列表
+        # 词缀组列表（原生Listbox，性能远优于逐行重建控件）
         list_frame = ctk.CTkFrame(self.lib_frame, corner_radius=10, fg_color="#16191e")
         list_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
-        self.group_scroll = ctk.CTkScrollableFrame(list_frame, fg_color="transparent")
-        self.group_scroll.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+
+        self.group_listbox = tk.Listbox(
+            list_frame, font=("Microsoft YaHei UI", 12),
+            bg="#16191e", fg="#c8d3e0", selectbackground="#3a6ea5",
+            selectforeground="white", highlightthickness=0, borderwidth=0,
+            activestyle="none", exportselection=False)
+        self.group_listbox.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=6)
+        group_sb = ctk.CTkScrollbar(list_frame, command=self.group_listbox.yview)
+        group_sb.grid(row=0, column=1, sticky="ns", padx=(0, 6), pady=6)
+        self.group_listbox.configure(yscrollcommand=group_sb.set)
+        self.group_listbox.bind("<<ListboxSelect>>", self._on_group_selected)
 
         # T阶选择行
         row3 = ctk.CTkFrame(self.lib_frame, fg_color="transparent")
@@ -356,6 +367,7 @@ class MainWindow:
 
         # 初始化
         self.current_groups = []
+        self._filtered_groups = []
         self.selected_group = None
         self._refresh_item_types()
 
@@ -403,50 +415,51 @@ class MainWindow:
         self.tier_combo.configure(values=["(先选词缀)"], state="disabled")
         self._render_group_list()
 
+    def _on_search_key(self, event=None):
+        """搜索输入防抖：250ms内不再重渲染"""
+        if self._search_job:
+            self.root.after_cancel(self._search_job)
+        self._search_job = self.root.after(250, self._render_group_list)
+
+    def _on_group_selected(self, event=None):
+        """列表选中事件"""
+        sel = self.group_listbox.curselection()
+        if sel and 0 <= sel[0] < len(self._filtered_groups):
+            self._select_group(self._filtered_groups[sel[0]])
+
+    @staticmethod
+    def _fmt(v: float) -> str:
+        return str(int(v)) if v == int(v) else f"{v:g}"
+
     def _render_group_list(self):
         """渲染词缀组列表"""
-        for child in self.group_scroll.winfo_children():
-            child.destroy()
+        self._search_job = None
+        keyword = self.affix_search.get().strip()
+        self._filtered_groups = []
+        for g in self.current_groups:
+            if not keyword:
+                self._filtered_groups.append(g)
+            else:
+                type_cn = "前缀" if g['mod_type'] == 'prefix' else "后缀"
+                if keyword in g['effect'] or keyword in type_cn or keyword in g['mod_type']:
+                    self._filtered_groups.append(g)
 
-        keyword = self.affix_search.get().strip() if hasattr(self, 'affix_search') else ''
-        groups = [g for g in self.current_groups
-                  if not keyword or keyword in g['effect'] or keyword in g['mod_type']]
-
-        if not groups:
-            ctk.CTkLabel(self.group_scroll, text="无匹配词缀",
-                         text_color=COLOR_TEXT_DIM).grid(row=0, column=0, pady=12)
-            return
-
-        for i, g in enumerate(groups[:80]):  # 限制渲染数量
-            tiers = g['tiers']
-            t1 = tiers[0]
+        self.group_listbox.delete(0, "end")
+        for g in self._filtered_groups[:300]:
             type_cn = "前缀" if g['mod_type'] == 'prefix' else "后缀"
-            lo = int(t1['lo']) if t1['lo'] == int(t1['lo']) else t1['lo']
-            hi = int(t1['hi']) if t1['hi'] == int(t1['hi']) else t1['hi']
-            text = f"{g['effect']}  [{type_cn}]  T1~T{len(tiers)}  T1数值:{lo}~{hi}"
-
-            row = ctk.CTkFrame(self.group_scroll, corner_radius=8,
-                               fg_color="#2b303b" if g is not self.selected_group else "#3a4a63")
-            row.grid(row=i, column=0, sticky="ew", pady=2, padx=2)
-            row.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(row, text=text, font=("Microsoft YaHei UI", 12),
-                         anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=5)
-            ctk.CTkButton(row, text="选择", width=52, height=24, corner_radius=6,
-                          fg_color="#3a6ea5", hover_color="#2f5a87", font=("", 11),
-                          command=lambda g=g: self._select_group(g)).grid(
-                row=0, column=1, padx=(0, 8), pady=5)
+            t1 = g['tiers'][0]
+            text = (f" {g['effect']}  [{type_cn}]  T1~T{len(g['tiers'])}"
+                    f"  ·  T1数值 {self._fmt(t1['lo'])}~{self._fmt(t1['hi'])}")
+            self.group_listbox.insert("end", text)
 
     def _select_group(self, group: Dict):
         """选中词缀组，填充T阶下拉框"""
         self.selected_group = group
         values = []
         for t in group['tiers']:
-            lo = int(t['lo']) if t['lo'] == int(t['lo']) else t['lo']
-            hi = int(t['hi']) if t['hi'] == int(t['hi']) else t['hi']
-            values.append(f"T{t['tier']} ({lo}~{hi})")
+            values.append(f"T{t['tier']} ({self._fmt(t['lo'])}~{self._fmt(t['hi'])})")
         self.tier_combo.configure(values=values, state="normal")
         self.tier_combo.set(values[0])
-        self._render_group_list()
 
     def _add_tier_requirement(self):
         """添加T阶需求"""

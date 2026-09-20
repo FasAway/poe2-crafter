@@ -124,8 +124,7 @@ def effect_display_name(description: str) -> str:
     d = strip_html(description)
     d = re.sub(r'\d+(?:\.\d+)?[—–-]?\d*(?:\.\d+)?%?', '', d)
     d = re.sub(r'[+()（）%\s.。]', '', d)
-    d = re.sub(r'^(增加|附加|获得)', r'\1', d)
-    d = d.lstrip('至')
+    d = d.replace('至', '')  # '附加至物理傷害' → '附加物理傷害'（与剪贴板匹配保持一致）
     return d or strip_html(description)
 
 

@@ -87,8 +87,8 @@ class AffixRequirement:
 
     @staticmethod
     def _cn_only(text: str) -> str:
-        """提取文本中的中文与字母部分（去数字和符号）"""
-        return re.sub(r'[^\u4e00-\u9fffA-Za-z]', '', text)
+        """提取文本中的中文与字母部分（去数字、符号和'至'字，与效果名规则一致）"""
+        return re.sub(r'[^\u4e00-\u9fffA-Za-z]', '', text).replace('至', '')
 
     def matches(self, affix: Affix) -> bool:
         """检查词缀是否匹配需求
@@ -155,18 +155,17 @@ class AffixRequirement:
 class ItemParser:
     """物品文本解析器"""
     
-    # 数值模式
+    # 数值模式（顺序重要：先匹配双数值区间，再匹配单数值）
     VALUE_PATTERNS = [
         # 模式: +(XX—YY)% 或 +(XX-YY)%
         (r'\+?\(?(\d+)[—–-](\d+)\)?%?', 'range'),
+        # 模式: XX至YY / XX到YY / XX-YY（附加伤害类，取后一个数值）
+        (r'(\d+)\s*[至到]\s*(\d+)', 'range'),
+        (r'(\d+)\s*-\s*(\d+)', 'range'),
         # 模式: +XX% 或 +XX
         (r'\+?(\d+)%?', 'single'),
         # 模式: 增加XX%
         (r'增加\s*(\d+)%?', 'single'),
-        # 模式: XX到YY
-        (r'(\d+)\s*到\s*(\d+)', 'range'),
-        # 模式: XX-YY
-        (r'(\d+)\s*-\s*(\d+)', 'range'),
     ]
     
     def __init__(self):
