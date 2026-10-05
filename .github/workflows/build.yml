@@ -2,55 +2,65 @@ name: Build EXE
 
 on:
   push:
-    branches: [ main ]
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
-    
+    defaults:
+      run:
+        shell: pwsh
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
-    
-    - name: Install UPX
-      run: |
-        curl.exe -L -o upx.zip https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip
-        Expand-Archive -Path upx.zip -DestinationPath upx-dir
-        echo "${{ github.workspace }}\upx-dir\upx-4.2.4-win64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-    
-    - name: Build EXE with PyInstaller
-      run: |
-        pyinstaller build.spec
-    
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: poe2-crafter
-        path: dist/*.exe
-        retention-days: 30
-    
-    - name: Create Release (on tag)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*.exe
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Run offline tests
+        run: python -m unittest discover -v
+
+      - name: Build Windows EXE
+        run: python -m PyInstaller --noconfirm build.spec
+
+      - name: Smoke-test packaged application
+        run: |
+          $taskSmokeReport = Join-Path $env:RUNNER_TEMP 'poe2-smoke.json'
+          $taskFixture = (Resolve-Path 'sample_item.txt').Path
+          $taskArguments = '--self-test "' + $taskFixture + '" "' + $taskSmokeReport + '"'
+          $taskProcess = Start-Process -FilePath 'dist/PoE2Crafter.exe' -ArgumentList $taskArguments -WindowStyle Hidden -Wait -PassThru
+          if ($taskProcess.ExitCode -ne 0) { throw 'Packaged application failed to start' }
+          if (-not (Test-Path -LiteralPath $taskSmokeReport)) { throw 'Smoke report missing' }
+          $taskReport = Get-Content -LiteralPath $taskSmokeReport -Raw | ConvertFrom-Json
+          if ($taskReport.evaluation -ne 'matched' -or $taskReport.rows -ne 7 -or $taskReport.conditions -ne 1 -or $taskReport.window_bound) {
+            throw 'Unexpected smoke-test result'
+          }
+
+      - name: Archive source
+        run: git archive --format=zip --output=dist/PoE2Crafter-source.zip HEAD
+
+      - name: Upload executable and source
+        uses: actions/upload-artifact@v7
+        with:
+          name: poe2-crafter-windows
+          path: |
+            dist/PoE2Crafter.exe
+            dist/PoE2Crafter-source.zip
+          if-no-files-found: error
+          retention-days: 30
