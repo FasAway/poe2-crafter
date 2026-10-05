@@ -1,8 +1,1 @@
-# 核心依赖
-pyperclip>=1.8.0
-pynput>=1.7.6
-requests>=2.31.0
-pydirectinput>=1.0.4; sys_platform == 'win32'
-
-# GUI依赖
-customtkinter>=5.2.2
+# Runtime uses the Python standard library only (including tkinter on Windows).
