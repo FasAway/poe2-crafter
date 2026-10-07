@@ -20,13 +20,14 @@ class App:
         self.root = tk.Tk()
         if hidden:
             self.root.withdraw()
-        self.root.title('PoE2 混沌石洗练 · v0.1.4 实机验证版')
+        self.root.title('PoE2 混沌石洗练 · v0.1.6 实机验证版')
         self.root.geometry('980x820')
         self.adapter = WindowsAdapter()
         self.messages = queue.Queue()
         self.crafter = Crafter(self.adapter, self.log, lambda item: self.messages.put(('item', item)))
         self.worker = None
         self.conditions = []
+        self.condition_mode = tk.StringVar(value='全部满足才停止')
         self.probed = False
         self.last_keys = set()
         self.pending_action = None
@@ -77,7 +78,15 @@ class App:
             self.tree.column(col, width=width)
         self.tree.pack(fill='x')
         self.tree.bind('<<TreeviewSelect>>', self.select_stat)
-        ttk.Label(outer, text='停止条件：全部同时满足。阶层填1为T1，填1-3接受T1至T3；留空不限。数值是下限，两者都填须同时满足。').pack(anchor='w', pady=(12, 4))
+        mode_row = ttk.Frame(outer)
+        mode_row.pack(fill='x', pady=(12, 4))
+        ttk.Label(mode_row, text='停止条件模式').pack(side='left')
+        mode_box = ttk.Combobox(mode_row, textvariable=self.condition_mode,
+                               values=['全部满足才停止', '任意一个满足就停止'], state='readonly', width=22)
+        mode_box.pack(side='left', padx=5)
+        mode_box.bind('<<ComboboxSelected>>', self.condition_mode_changed)
+        ttk.Label(mode_row, text='下次启动生效').pack(side='left')
+        ttk.Label(outer, text='每条条件：阶层填1为T1，填1-3接受T1至T3；留空不限。数值是下限，两者都填须同时满足。').pack(anchor='w', pady=(0, 4))
         row = ttk.Frame(outer)
         row.pack(fill='x')
         for label, var, width in [('繁体关键词', self.keyword, 23), ('阶层', self.tier, 8), ('数值≥', self.minimum, 7), ('数值位置', self.index, 4)]:
@@ -144,9 +153,17 @@ class App:
             tier_label = '不限' if tier is None else f'T{tier}' if tier_max is None else f'T{tier}-T{tier_max}'
             self.condition_list.insert('end', f'{self.kind.get()} | {condition.keyword} | {tier_label} | 数值≥{condition.minimum or "不限"} | 位置{self.index.get() or "自动"}')
             if self.last_item:
-                self.log(f'当前装备条件预览：{evaluate(self.last_item, self.conditions)[0]}')
+                self.log(f'当前装备条件预览：{evaluate(self.last_item, self.conditions, self.condition_mode_value())[0]}')
         except Exception as error:
             self.log(f'条件错误：{error}')
+
+    def condition_mode_value(self):
+        return 'any' if self.condition_mode.get() == '任意一个满足就停止' else 'all'
+
+    def condition_mode_changed(self, _=None):
+        self.log(f'停止条件模式：{self.condition_mode.get()}；下次启动生效')
+        if self.last_item and self.conditions and not self.busy():
+            self.log(f'当前装备条件预览：{evaluate(self.last_item, self.conditions, self.condition_mode_value())[0]}')
 
     def delete(self):
         if not self.busy():
@@ -206,14 +223,16 @@ class App:
                     raise ValueError('未设置停止条件')
             limit = int(self.limit.get())
             conditions = list(self.conditions)
+            condition_mode = self.condition_mode_value()
             timing = self.timing_from_ui()
             self.adapter.combo = self.combo.get()
             self.adapter.continuous = self.continuous.get()
             self.adapter.timing = timing
             jitter = f'{timing.random_min_ms:g}至{timing.random_max_ms:g}ms' if timing.random_enabled else '关闭'
             self.log(f'速度 {timing.speed:g}倍；随机额外延迟 {jitter}；每次使用后仍读取并判断装备')
+            self.log(f'停止条件模式：{self.condition_mode.get()}')
             self.crafter.stop.clear()
-            self.worker = threading.Thread(target=self.work, args=(action, conditions, limit), daemon=True)
+            self.worker = threading.Thread(target=self.work, args=(action, conditions, limit, condition_mode), daemon=True)
             self.worker.start()
         except Exception as error:
             self.log(f'无法启动：{error}')
@@ -225,16 +244,16 @@ class App:
         except ValueError as error:
             raise ValueError(f'速度/延迟设置错误：{error}') from error
 
-    def work(self, action, conditions, limit):
+    def work(self, action, conditions, limit, condition_mode):
         try:
             if action == 'probe':
                 item = self.crafter.read()
                 self.messages.put(('probed', True))
                 if conditions:
-                    self.log(f'当前装备条件判断：{evaluate(item, conditions)[0]}')
+                    self.log(f'当前装备条件判断：{evaluate(item, conditions, condition_mode)[0]}')
                 self.log('只读测试成功；尚未使用通货')
             else:
-                self.crafter.run(conditions, limit)
+                self.crafter.run(conditions, limit, condition_mode)
         except Cancelled:
             self.log('操作已停止')
         except Exception as error:
@@ -300,6 +319,7 @@ class App:
                        'timing_active': asdict(self.adapter.timing),
                        'timing_inputs': {'speed': self.speed.get(), 'random_enabled': self.random_enabled.get(),
                                          'random_min_ms': self.random_min.get(), 'random_max_ms': self.random_max.get()},
+                       'condition_mode': self.condition_mode_value(),
                        'conditions': [vars(c) for c in self.conditions], 'item': asdict(self.last_item) if self.last_item else None,
                        'log': self.logbox.get('1.0', 'end')}
             target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')

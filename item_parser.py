@@ -105,6 +105,12 @@ def parse_item(text: str) -> Item:
             if line in ('已汙染', '已污染', '已腐化', 'Corrupted'):
                 item.corrupted = True
             if line.startswith('{') and line.endswith('}'):
+                # Traditional client names base implicits 固定詞綴. They are
+                # not rerollable explicit modifiers or crafting stop criteria.
+                if re.search(r'固定詞綴|固定词缀', line):
+                    current = None
+                    other.append(line)
+                    continue
                 kind = re.search(r"前綴|前缀|後綴|后缀|Prefix|Suffix|Implicit|固有|隱性|隐性", line, re.I)
                 if not kind:
                     current = None

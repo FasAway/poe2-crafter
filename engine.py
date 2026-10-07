@@ -29,12 +29,18 @@ def parse_tier_spec(text: str) -> tuple[int | None, int | None]:
     return low, high
 
 
-def evaluate(item: Item, conditions: list[Condition]) -> tuple[str, list[dict]]:
+def evaluate(item: Item, conditions: list[Condition], mode: str = 'all') -> tuple[str, list[dict]]:
+    if mode not in ('all', 'any'):
+        raise ValueError('未知停止条件模式')
     if not conditions:
         raise ValueError('请先添加停止条件')
     results = [check_condition(item, **vars(c)) for c in conditions]
-    # Fail closed even if another AND condition is definitely not satisfied.
-    status = 'unknown' if any(r['status'] == 'unknown' for r in results) else 'matched' if all(r['status'] == 'matched' for r in results) else 'not_matched'
+    # One definite OR match is sufficient to stop, even if another rule is
+    # ambiguous. Without a definite match, unknown still prevents spending.
+    if mode == 'any' and any(r['status'] == 'matched' for r in results):
+        status = 'matched'
+    else:
+        status = 'unknown' if any(r['status'] == 'unknown' for r in results) else 'matched' if all(r['status'] == 'matched' for r in results) else 'not_matched'
     return status, results
 
 
@@ -77,7 +83,7 @@ class Crafter:
             self.on_item(item)
         return item
 
-    def run(self, conditions: list[Condition], limit: int = 100):
+    def run(self, conditions: list[Condition], limit: int = 100, mode: str = 'all'):
         if not 1 <= limit <= 10000:
             raise ValueError('最大次数须为1至10000')
         self.attempts = 0
@@ -86,12 +92,13 @@ class Crafter:
             anchor = identity(before)
             for _ in range(limit + 1):
                 self.checkpoint()
-                state, results = evaluate(before, conditions)
+                state, results = evaluate(before, conditions, mode)
                 self.log(f'条件判断：{state}；' + '；'.join(r['reason'] for r in results))
                 if state == 'unknown':
                     raise ValueError('条件判断有歧义，已停止。明确前/后缀、阶层或数值位置后重试。')
                 if state == 'matched':
-                    self.log(f'已满足全部条件；本轮发送混沌石操作 {self.attempts} 次')
+                    matched_label = '至少一个条件' if mode == 'any' else '全部条件'
+                    self.log(f'已满足{matched_label}；本轮发送混沌石操作 {self.attempts} 次')
                     return 'matched'
                 if self.attempts >= limit:
                     self.log('达到操作次数上限，已停止')
